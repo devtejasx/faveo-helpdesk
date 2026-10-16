@@ -731,7 +731,6 @@
              falls back to a relative path which 404s on nested routes. -->
         <script>window.faveoBaseUrl = @json(url('/'));</script>
         <script src="{{asset("lb-faveo/js/languagechanger.js")}}" type="text/javascript"></script>
-        <script src="{{asset("lb-faveo/plugins/filebrowser/plugin.js")}}" type="text/javascript"></script>
 
         <script type="text/javascript">
                     $.ajaxSetup({
