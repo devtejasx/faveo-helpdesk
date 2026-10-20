@@ -227,7 +227,7 @@ class StorageController extends Controller
                     if (isset($structure->disposition)) {
                         $disposition = $structure->disposition;
                     }
-                    $filename = rand(1111, 9999).'_'.$attachment->getFileName();
+                    $filename = rand(1111, 9999).'_'.$this->imapAttachmentFileName($attachment, $structure);
                     $type = $attachment->getMimeType();
                     $size = $attachment->getSize();
                     $data = $attachment->getData();
@@ -243,6 +243,89 @@ class StorageController extends Controller
         }
 
         return $thread;
+    }
+
+    /**
+     * The file name of an attachment fetched over IMAP.
+     *
+     * Fetch only reads plain "filename" and "name" parameters. A name sent in
+     * RFC 2231 form (filename*=utf-8''..., or split into filename*0*,
+     * filename*1*, ...), which Gmail uses for non-ASCII names, was lost or
+     * garbled, so the download got a broken name.
+     *
+     * @param \Fetch\Attachment $attachment
+     * @param \stdClass         $structure
+     *
+     * @return string
+     */
+    public function imapAttachmentFileName($attachment, $structure)
+    {
+        foreach (['dparameters' => 'filename', 'parameters' => 'name'] as $list => $attribute) {
+            if (isset($structure->$list) && is_array($structure->$list)) {
+                $name = self::rfc2231Parameter($structure->$list, $attribute);
+                if ($name !== null && $name !== '') {
+                    return $name;
+                }
+            }
+        }
+
+        return $attachment->getFileName();
+    }
+
+    /**
+     * Joins and decodes the RFC 2231 sections of a MIME parameter, or returns
+     * null when the parameter is not sent in that form.
+     *
+     * @param array  $parameters objects with "attribute" and "value", as imap_fetchstructure() returns them
+     * @param string $attribute  the parameter name, such as "filename"
+     *
+     * @return string|null the value in UTF-8
+     */
+    public static function rfc2231Parameter(array $parameters, $attribute)
+    {
+        $sections = [];
+        foreach ($parameters as $parameter) {
+            if (!isset($parameter->attribute, $parameter->value)) {
+                continue;
+            }
+            if (!preg_match('/^'.preg_quote($attribute, '/').'\*(\d+)?(\*)?$/i', $parameter->attribute, $match)) {
+                continue;
+            }
+            // "name*" is one encoded section; "name*N*" is encoded, "name*N" is not.
+            $index = isset($match[1]) && $match[1] !== '' ? (int) $match[1] : 0;
+            $encoded = !isset($match[1]) || $match[1] === '' || !empty($match[2]);
+            $sections[$index] = [$encoded, $parameter->value];
+        }
+        if (!$sections) {
+            return null;
+        }
+        ksort($sections);
+
+        $charset = 'UTF-8';
+        $value = '';
+        foreach ($sections as $index => $section) {
+            list($encoded, $text) = $section;
+            if ($encoded && $index === 0 && preg_match("/^([^']*)'[^']*'(.*)$/s", $text, $match)) {
+                if ($match[1] !== '') {
+                    $charset = $match[1];
+                }
+                $text = $match[2];
+            }
+            $value .= $encoded ? rawurldecode($text) : $text;
+        }
+
+        if (strcasecmp($charset, 'UTF-8') !== 0 && strcasecmp($charset, 'UTF8') !== 0) {
+            try {
+                $converted = mb_convert_encoding($value, 'UTF-8', $charset);
+                if ($converted !== false) {
+                    $value = $converted;
+                }
+            } catch (\ValueError $e) {
+                // An unknown charset name: keep the bytes as they are.
+            }
+        }
+
+        return $value;
     }
 
     public function updateBody($attachment, $thread_id, $filename)
